@@ -1,0 +1,168 @@
+---
+title: "GAM fits for hirsutism data"
+author: "Marcel Porta Valles, Javier Ferrando, Joan Prat"
+date: 06/01/2020
+output: pdf_document
+---
+
+
+```{r setup, include=FALSE,echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("/Users/JaviFerrando/Dropbox/3erCuatri/ASM/gam-lab")
+knitr::opts_chunk$set(fig.width=11, fig.height=6) 
+library(knitr)
+library(splines)
+library(dplyr)
+library(mgcv)
+library(ggplot2)
+library(tidyr)
+library(corrplot)
+library(mltools)
+library(caret)
+```
+
+```{r, include=TRUE,echo=FALSE}
+hirs <- read.table("hirsutism.dat",header=T, sep="\t",fill=TRUE)
+hirs <- hirs[complete.cases(hirs), ]
+#summary(hirs)
+attach(hirs)
+```
+
+We show a scatterplot of every variable measured at the beginning of the clinical trial against FGm12 (target variable) and a linear regression to show the tendency.
+
+```{r, echo=FALSE, include=TRUE, warning = FALSE}
+hirs %>%
+  gather(-FGm12,-FGm3, -FGm6, key = "var", value = "value") %>% 
+    ggplot(aes(x = value, y = FGm12)) + 
+    geom_point() + 
+    geom_smooth(method = 'lm') +
+    facet_wrap(~ var, scales = "free") +
+    #facet_wrap( ~ as.factor(Treatment)) + 
+    labs(
+        x = 'Baseline variables',
+        y = 'FGm12', 
+        title = 'Features vs FGm12')
+```
+
+
+We can see that between FGm12 and FGm0 there's an apparent linear relationship while other features doesn't seem to have a clear linear correlation with our target variable.
+
+## Multiple Linear Regression
+
+Firstly, we start with a simple multiple linear regression with every 'baseline' variable $y = \alpha + \beta_1 \cdot FGm0 + \beta_1 \cdot Treatment + \beta_2 \cdot DiaPres +\beta_3 \cdot  SysPres +\beta_4 \cdot  weight + \beta_5 \cdot height$ and observe that the p-values of the t-statistic for the coefficients of variables DiaPres, SysPres, weight and height lay above the 0.005 threshold. So, null hypothesis $H_0:$ There is no linear relationship between the prioir metnioned predictors and $FGm12$ can't be rejected.
+
+```{r, echo=FALSE, include=TRUE}
+am1.0 <- gam(FGm12 ~ FGm0 + Treatment + DiaPres + SysPres + weight + height, data=hirs)
+p_val <- as.data.frame(summary(am1.0)[4])
+kable(p_val)
+#summary(am1.0)
+```
+
+R-sq.(adj): `r summary(am1.0)$r.sq`
+
+## Generalized Additive Model using splines
+
+$y = \alpha + s(FGm0) + s(DiaPres) + s(SysPres) + s(weight) + s(height)$
+
+```{r, echo=FALSE, include=TRUE, fig.width=11, fig.height=8}
+am1.1 <- gam(FGm12 ~ s(FGm0) + s(DiaPres) + s(SysPres) + s(weight) + s(height), data=hirs)
+p_val <- as.data.frame(summary(am1.1)[8])
+smooth_terms <- c('s(FGm0)', 's(DiaPres)' , 's(SysPres)', 's(weight)', 's(height)')
+#summary(am1.1)
+par(mfrow=c(3,2))
+plot.gam(am1.1)
+```
+```{r, echo=FALSE, include=TRUE}
+kable(cbind(smooth_terms,p_val))
+```
+
+As it can be observed in the plots, spline function $s()$ finds as the best option best almost constant value functions, taking a look a the p-values, there is no clear evidence that a non-linear term is required for the 'baseline' variables except for $\textit{FGm0}$.
+
+R-sq.(adj): `r summary(am1.1)$r.sq`
+
+## Non-parametric bivariate regression using splines (thin plate)
+
+$y = \alpha + s(FGm0, Treatment)$
+
+```{r, echo=FALSE, include=TRUE}
+th.pl.RM <- gam(FGm12 ~ s(FGm0, Treatment, bs="tp"))
+#summary(th.pl.RM)
+```
+
+```{r, echo=FALSE, include=TRUE, warning = FALSE, fig.width=9, fig.height=5}
+# 3d estimated function
+library(rgl)
+x <- seq(min(FGm0),max(FGm0), length= 30)
+y <- seq(min(Treatment),max(Treatment), length= 30)
+# predicting with the nonparametric fit (type="link", default)
+f <- function(x,y) { r <- predict(th.pl.RM, newdata=data.frame(FGm0=x,Treatment=y))}
+z <- outer(x, y, f)
+
+par(mfrow=c(1,2))
+persp(x,y,z,xlab = "FGm0", ylab = "Treatment", zlab = "FGm12", theta = -100, phi = 20, col = "yellow", shade = 0.6, ticktype='detailed')
+persp(x,y,z,xlab = "FGm0", ylab = "Treatment", zlab = "FGm12", theta = -40, phi = 10, col = "yellow", shade = 0.6, ticktype='detailed')
+```
+
+```{r, echo=FALSE, include=TRUE, warning = FALSE, fig.width=10, fig.height=6}
+par(mfrow=c(1,1))
+vis.gam(th.pl.RM,se=0,plot.type="contour",contour.col=1)
+points(FGm0,Treatment,col="blue")
+```
+
+The smoothing splines model with $FGm0$ and $Treatment$ shows that depending on the initial hirsutism value, a treatment might be better than the others. For example, for low values of $FGm0$, treatment 3 shows better results after 12 months ($FGm12$) than treatment 1 or 0. However, for higher values of $FGm0$, Treatment doesn't seem to be very decisive.
+
+R-sq.(adj): `r summary(th.pl.RM)$r.sq`
+
+## Semiparametric model
+
+$y = \alpha + s(FGm0, Treatment) + height + weight + SysPres$
+
+```{r, echo=FALSE, include=TRUE}
+am3.0 <- gam(FGm12 ~ s(FGm0,Treatment, bs="tp") + height + weight + SysPres, data=hirs)
+#summary(am3.0)
+#plot(am3.0,pages=1,residuals=TRUE)
+```
+
+After testing several combinations of non-parametric bivariate regression $s(FGm0, Treatment)$ together with linear combinations of 'baseline' variables, we can't find a significant improvement.
+
+R-sq.(adj): `r summary(am3.0)$r.sq`
+
+## Model selection with ANOVA
+
+**Multiple Linear Regression (MLR) vs Generalized Additive Model using splines (GAMs)**
+
+```{r, echo=FALSE, include=TRUE, warning = FALSE}
+kable(anova(am1.0,am1.1,test="F"))
+#Multiple Linear Regression better
+```
+
+No evidence to reject $H_0:$, so we accept MLR is a better model.
+
+**Generalized Additive Model using splines (GAMs) vs Bivariate regression using splines (Bis)**
+
+```{r, echo=FALSE, include=TRUE, warning = FALSE}
+kable(anova(am1.1,th.pl.RM,test="F"))
+#Spline plate better
+```
+
+Evidence to reject $H_0:$, so we accept Bis is a better model.
+
+**Bivariate regression using splines (Bis) vs Semiparametric model (SP)**
+
+```{r, echo=FALSE, include=TRUE, warning = FALSE}
+kable(anova(th.pl.RM,am3.0,test="F"))
+#Spline plate better
+```
+
+No evidence to reject $H_0:$, so we accept Bis is a better model.
+
+**Multiple Linear Regression (MLR) vs Bivariate regression using splines (Bis)**
+
+```{r, echo=FALSE, include=TRUE, warning = FALSE}
+kable(anova(am1.0,th.pl.RM,test="F"))
+#Spline plate better
+```
+
+No evidence to reject $H_0:$, so we accept MLR is a better model.
+
+After comparing different models by pairs, we get that Multiple Linear Regression (MLR) looks the best model dispate it achieves lower R-sq.(adj) than the proposed Bivariate regression with splines.
